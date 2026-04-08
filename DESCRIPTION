@@ -1,0 +1,27 @@
+Package: shinyClaudeCodeUI
+Title: Chat UI for Claude Code in Shiny Applications
+Version: 0.1.0
+Authors@R:
+    person("Kaiping", "Yang", email = "kaiping.yang@beigene.com", role = c("aut", "cre"))
+Description: Embed Claude Code as a chat-style UI inside Shiny applications using
+    shinychat. Communicates with the Claude Code CLI via bidirectional stream-json
+    protocol over processx pipes. Renders assistant responses as Markdown bubbles,
+    tool calls as collapsible cards, and supports permission approval dialogs.
+    Works behind corporate proxies like Posit Workbench and Posit Connect by
+    routing all communication through Shiny's own WebSocket connection.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    shiny (>= 1.7.0),
+    shinychat (>= 0.3.0),
+    processx (>= 3.8.0),
+    later,
+    jsonlite,
+    htmltools,
+    bsicons,
+    cli
+Suggests:
+    testthat (>= 3.0.0)
+SystemRequirements: Claude Code CLI (https://claude.ai/code)
