@@ -47,11 +47,6 @@
   50% { opacity: 0.4; }
 }
 
-/* Hide the "ghost" message bubble left behind after tool request is hidden.
-   Applied via JS (see claude_chat_module.R inline script). */
-shiny-chat-message.tool-request-done {
-  display: none !important;
-}
 
 /* Thinking cards */
 .claude-thinking-card {

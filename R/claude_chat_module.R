@@ -81,21 +81,7 @@ claude_chat_ui <- function(id, height = "100%") {
           }
         });
 
-        // When shinychat hides a shiny-tool-request (triggered by shiny-tool-result),
-        // also hide the parent shiny-chat-message bubble to remove the empty ghost bubble.
-        window.addEventListener("shiny-tool-request-hide", function(e) {
-          var reqId = e.detail && e.detail.request_id;
-          if (!reqId) return;
-          setTimeout(function() {
-            // Try both tag selector and class selector
-            var req = document.querySelector("shiny-tool-request[request-id=\"" + reqId + "\"]") ||
-                      document.querySelector(".shiny-tool-request[request-id=\"" + reqId + "\"]");
-            if (req) {
-              var msg = req.closest("shiny-chat-message");
-              if (msg) msg.classList.add("tool-request-done");
-            }
-          }, 0);
-        });
+
       })();
     ',
       id,
@@ -435,8 +421,8 @@ handle_event <- function(evt, rv, session, ns, id) {
         content_str <- if (is.character(content)) content
                        else jsonlite::toJSON(content, auto_unbox = TRUE)
 
-        # Render as shinychat native tool result card
-        message("[DEBUG] user/tool_result: ", tool_name, " id=", block$tool_use_id)
+        # Replace the shiny-tool-request bubble in-place using chunk=TRUE + operation="replace"
+        # chunk=FALSE always creates a new message; chunk=TRUE with operation=NULL replaces content
         card_html <- as.character(htmltools::tag("shiny-tool-result", list(
           `request-id` = block$tool_use_id,
           `tool-name` = tool_name %||% "unknown",
@@ -446,7 +432,7 @@ handle_event <- function(evt, rv, session, ns, id) {
         )))
         shinychat::chat_append_message(chat_id,
           list(role = "assistant", content = card_html),
-          chunk = FALSE, session = session)
+          chunk = TRUE, operation = "replace", session = session)
       }
     }
     return(invisible())
@@ -490,11 +476,15 @@ handle_event <- function(evt, rv, session, ns, id) {
             chunk = FALSE, session = session)
         }
       }
-      # Mark thinking stream start
+      # Show thinking placeholder bubble immediately
       if (identical(block$type, "thinking")) {
         rv$is_thinking <- TRUE
         rv$current_thinking <- ""
         update_progress("Thinking...")
+        placeholder <- as.character(thinking_card("..."))
+        shinychat::chat_append_message(chat_id,
+          list(role = "assistant", content = placeholder),
+          chunk = FALSE, session = session)
       }
     }
 
@@ -546,12 +536,13 @@ handle_event <- function(evt, rv, session, ns, id) {
         rv$text_already_rendered <- TRUE
       }
       if (isTRUE(rv$is_thinking)) {
-        if (nzchar(rv$current_thinking %||% "")) {
-          card_html <- as.character(thinking_card(rv$current_thinking))
-          shinychat::chat_append_message(chat_id,
-            list(role = "assistant", content = card_html),
-            chunk = FALSE, session = session)
-        }
+        # Replace the placeholder with final thinking card (or remove if empty)
+        final_content <- if (nzchar(rv$current_thinking %||% ""))
+          as.character(thinking_card(rv$current_thinking))
+        else ""
+        shinychat::chat_append_message(chat_id,
+          list(role = "assistant", content = final_content),
+          chunk = TRUE, operation = "replace", session = session)
         rv$is_thinking <- FALSE
         rv$is_thinking_streaming <- FALSE
         rv$current_thinking <- ""
