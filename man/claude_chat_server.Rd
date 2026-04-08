@@ -12,7 +12,10 @@ claude_chat_server(
   model = NULL,
   system_prompt = NULL,
   allowed_tools = NULL,
-  disallowed_tools = NULL
+  disallowed_tools = NULL,
+  api_key = NULL,
+  env = NULL,
+  config_file = NULL
 )
 }
 \arguments{
@@ -20,7 +23,8 @@ claude_chat_server(
 
 \item{workdir}{Working directory for Claude Code (default: current directory)}
 
-\item{claude_bin}{Path to claude binary (auto-detected if NULL)}
+\item{claude_bin}{Path to claude binary (auto-detected if NULL). Can also be
+set via the \code{CLAUDE_BIN} environment variable.}
 
 \item{permission_mode}{Permission mode: "default", "auto", "plan", or
 "bypassPermissions" (default: "bypassPermissions"). Note: interactive
@@ -35,6 +39,25 @@ with \code{allowed_tools}/\code{disallowed_tools} to control access.}
 \item{allowed_tools}{Optional character vector of allowed tool names}
 
 \item{disallowed_tools}{Optional character vector of disallowed tool names}
+
+\item{api_key}{Optional Anthropic API key string. Passed as the
+\code{ANTHROPIC_API_KEY} environment variable to the Claude subprocess.
+Merged with the parent process environment; takes precedence over any
+same-named variable in \code{env}. If \code{NULL} (default), the parent process
+value of \code{ANTHROPIC_API_KEY} is inherited as-is.}
+
+\item{env}{Optional named character vector of extra environment variables
+to pass to the Claude subprocess, e.g.
+\code{c(ANTHROPIC_BASE_URL = "https://...", HTTPS_PROXY = "...")}.
+Merged on top of the parent process environment; values here override
+same-named parent vars.}
+
+\item{config_file}{Optional path to a settings JSON file (same format as
+\verb{~/.claude/settings.json}). Passed to the CLI via \verb{--settings <path>}.
+Settings are \strong{merged on top of} the user's existing
+\verb{~/.claude/settings.json}; they do not replace it. Use this to supply
+per-session overrides such as MCP server definitions or model preferences
+without modifying the global user config.}
 }
 \value{
 NULL (called for side effects)
@@ -43,8 +66,25 @@ NULL (called for side effects)
 Manages the Claude Code CLI process lifecycle: starts the subprocess,
 polls for JSON events, renders them via shinychat, and handles cleanup.
 }
+\section{Slash commands and skills}{
+
+Users can type \verb{/skill-name} directly in the chat input (e.g. \verb{/commit},
+\verb{/review}) to invoke any Claude Code skill installed in
+\verb{~/.claude/skills/}. No additional configuration is required.
+}
+
 \examples{
 \dontrun{
+# Basic usage
 claude_chat_server("claude", workdir = "/path/to/project")
+
+# With API key and custom base URL
+claude_chat_server("claude",
+  api_key = Sys.getenv("MY_API_KEY"),
+  env = c(ANTHROPIC_BASE_URL = "https://my-proxy.example.com"))
+
+# With custom settings file
+claude_chat_server("claude",
+  config_file = "path/to/project-settings.json")
 }
 }

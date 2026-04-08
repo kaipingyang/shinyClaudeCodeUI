@@ -3,11 +3,20 @@
 #' @return Path to claude binary
 #' @keywords internal
 find_claude <- function() {
-  # Check explicit path first
+  # 1. Explicit override via CLAUDE_BIN env var
+  env_bin <- Sys.getenv("CLAUDE_BIN", unset = "")
+  if (nzchar(env_bin)) {
+    if (!file.exists(env_bin))
+      warning("CLAUDE_BIN='", env_bin, "' does not exist; falling back to PATH search")
+    else
+      return(env_bin)
+  }
+
+  # 2. PATH lookup
   claude <- Sys.which("claude")
   if (nzchar(claude)) return(claude)
 
-  # Common install locations
+  # 3. Common install locations
   candidates <- c(
     path.expand("~/.local/bin/claude"),
     path.expand("~/.claude/local/claude"),
@@ -17,7 +26,7 @@ find_claude <- function() {
     if (file.exists(p)) return(p)
   }
 
-  stop("Claude Code CLI not found. Install from https://claude.ai/code")
+  stop("Claude Code CLI not found. Install from https://claude.ai/code or set CLAUDE_BIN env var")
 }
 
 
@@ -34,13 +43,19 @@ find_claude <- function() {
 #' @param system_prompt Optional system prompt override
 #' @param allowed_tools Optional character vector of allowed tools
 #' @param disallowed_tools Optional character vector of disallowed tools
+#' @param api_key Optional Anthropic API key (`ANTHROPIC_API_KEY`)
+#' @param env Optional named character vector of extra environment variables
+#' @param config_file Optional path to a settings JSON file (`--settings`)
 #'
 #' @keywords internal
 claude_start <- function(session, id, workdir, claude_bin,
                          model = NULL, permission_mode = NULL,
                          system_prompt = NULL,
                          allowed_tools = NULL,
-                         disallowed_tools = NULL) {
+                         disallowed_tools = NULL,
+                         api_key = NULL,
+                         env = NULL,
+                         config_file = NULL) {
 
   args <- c(
     "-p",
@@ -69,6 +84,16 @@ claude_start <- function(session, id, workdir, claude_bin,
   if (!is.null(disallowed_tools)) {
     args <- c(args, "--disallowedTools", paste(disallowed_tools, collapse = ","))
   }
+  if (!is.null(config_file)) {
+    args <- c(args, "--settings", normalizePath(config_file, mustWork = TRUE))
+  }
+
+  proc_env <- NULL
+  if (!is.null(env) || !is.null(api_key)) {
+    proc_env <- "current"
+    if (!is.null(env)) proc_env <- c(proc_env, env)
+    if (!is.null(api_key)) proc_env <- c(proc_env, ANTHROPIC_API_KEY = api_key)
+  }
 
   proc <- processx::process$new(
     command = claude_bin,
@@ -76,7 +101,8 @@ claude_start <- function(session, id, workdir, claude_bin,
     stdin = "|",
     stdout = "|",
     stderr = "|",
-    wd = workdir
+    wd = workdir,
+    env = proc_env
   )
 
   # Store in session userData

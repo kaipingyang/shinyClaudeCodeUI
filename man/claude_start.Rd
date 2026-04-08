@@ -13,7 +13,10 @@ claude_start(
   permission_mode = NULL,
   system_prompt = NULL,
   allowed_tools = NULL,
-  disallowed_tools = NULL
+  disallowed_tools = NULL,
+  api_key = NULL,
+  env = NULL,
+  config_file = NULL
 )
 }
 \arguments{
@@ -34,6 +37,12 @@ claude_start(
 \item{allowed_tools}{Optional character vector of allowed tools}
 
 \item{disallowed_tools}{Optional character vector of disallowed tools}
+
+\item{api_key}{Optional Anthropic API key (\code{ANTHROPIC_API_KEY})}
+
+\item{env}{Optional named character vector of extra environment variables}
+
+\item{config_file}{Optional path to a settings JSON file (\code{--settings})}
 }
 \description{
 Launches \code{claude -p --stream-json} as a subprocess with stdin/stdout pipes.

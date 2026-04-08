@@ -100,7 +100,8 @@ claude_chat_ui <- function(id, height = "100%") {
 #'
 #' @param id Module namespace id (must match the id used in `claude_chat_ui`)
 #' @param workdir Working directory for Claude Code (default: current directory)
-#' @param claude_bin Path to claude binary (auto-detected if NULL)
+#' @param claude_bin Path to claude binary (auto-detected if NULL). Can also be
+#'   set via the `CLAUDE_BIN` environment variable.
 #' @param permission_mode Permission mode: "default", "auto", "plan", or
 #'   "bypassPermissions" (default: "bypassPermissions"). Note: interactive
 #'   permission approval is not supported in stream-json pipe mode, so
@@ -110,13 +111,44 @@ claude_chat_ui <- function(id, height = "100%") {
 #' @param system_prompt Optional system prompt override
 #' @param allowed_tools Optional character vector of allowed tool names
 #' @param disallowed_tools Optional character vector of disallowed tool names
+#' @param api_key Optional Anthropic API key string. Passed as the
+#'   `ANTHROPIC_API_KEY` environment variable to the Claude subprocess.
+#'   Merged with the parent process environment; takes precedence over any
+#'   same-named variable in `env`. If `NULL` (default), the parent process
+#'   value of `ANTHROPIC_API_KEY` is inherited as-is.
+#' @param env Optional named character vector of extra environment variables
+#'   to pass to the Claude subprocess, e.g.
+#'   `c(ANTHROPIC_BASE_URL = "https://...", HTTPS_PROXY = "...")`.
+#'   Merged on top of the parent process environment; values here override
+#'   same-named parent vars.
+#' @param config_file Optional path to a settings JSON file (same format as
+#'   `~/.claude/settings.json`). Passed to the CLI via `--settings <path>`.
+#'   Settings are **merged on top of** the user's existing
+#'   `~/.claude/settings.json`; they do not replace it. Use this to supply
+#'   per-session overrides such as MCP server definitions or model preferences
+#'   without modifying the global user config.
+#'
+#' @section Slash commands and skills:
+#' Users can type `/skill-name` directly in the chat input (e.g. `/commit`,
+#' `/review`) to invoke any Claude Code skill installed in
+#' `~/.claude/skills/`. No additional configuration is required.
 #'
 #' @return NULL (called for side effects)
 #' @export
 #'
 #' @examples
 #' \dontrun{
+#' # Basic usage
 #' claude_chat_server("claude", workdir = "/path/to/project")
+#'
+#' # With API key and custom base URL
+#' claude_chat_server("claude",
+#'   api_key = Sys.getenv("MY_API_KEY"),
+#'   env = c(ANTHROPIC_BASE_URL = "https://my-proxy.example.com"))
+#'
+#' # With custom settings file
+#' claude_chat_server("claude",
+#'   config_file = "path/to/project-settings.json")
 #' }
 claude_chat_server <- function(id, workdir = getwd(),
                                claude_bin = NULL,
@@ -124,7 +156,10 @@ claude_chat_server <- function(id, workdir = getwd(),
                                model = NULL,
                                system_prompt = NULL,
                                allowed_tools = NULL,
-                               disallowed_tools = NULL) {
+                               disallowed_tools = NULL,
+                               api_key = NULL,
+                               env = NULL,
+                               config_file = NULL) {
 
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -172,8 +207,22 @@ claude_chat_server <- function(id, workdir = getwd(),
       if (!is.null(system_prompt)) args <- c(args, "--system-prompt", system_prompt)
       if (!is.null(allowed_tools)) args <- c(args, "--allowedTools", paste(allowed_tools, collapse = ","))
       if (!is.null(disallowed_tools)) args <- c(args, "--disallowedTools", paste(disallowed_tools, collapse = ","))
+      if (!is.null(config_file)) args <- c(args, "--settings", normalizePath(config_file, mustWork = TRUE))
 
       args
+    }
+
+    # Build subprocess env — merges parent env with api_key and user-supplied env
+    build_env <- function() {
+      if (is.null(api_key) && is.null(env)) return(NULL)
+      if (!is.null(env)) {
+        if (!is.character(env) || is.null(names(env)) || any(!nzchar(names(env))))
+          stop("'env' must be a named character vector with non-empty names")
+      }
+      proc_env <- "current"  # processx sentinel: inherit parent env
+      if (!is.null(env)) proc_env <- c(proc_env, env)
+      if (!is.null(api_key)) proc_env <- c(proc_env, ANTHROPIC_API_KEY = api_key)
+      proc_env
     }
 
     # --- later::later() based polling (each callback = own flush cycle) ---
@@ -221,7 +270,8 @@ claude_chat_server <- function(id, workdir = getwd(),
           command = claude_bin,
           args = build_args(),
           stdin = "|", stdout = "|", stderr = "|",
-          wd = workdir
+          wd = workdir,
+          env = build_env()
         )
         rv$buffer <- ""
         just_started <- TRUE
