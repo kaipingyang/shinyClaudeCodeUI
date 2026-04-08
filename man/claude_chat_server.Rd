@@ -15,7 +15,8 @@ claude_chat_server(
   disallowed_tools = NULL,
   api_key = NULL,
   env = NULL,
-  config_file = NULL
+  config_file = NULL,
+  skills_dir = path.expand("~/.claude/skills")
 )
 }
 \arguments{
@@ -58,6 +59,11 @@ Settings are \strong{merged on top of} the user's existing
 \verb{~/.claude/settings.json}; they do not replace it. Use this to supply
 per-session overrides such as MCP server definitions or model preferences
 without modifying the global user config.}
+
+\item{skills_dir}{Directory containing Claude Code skills (default:
+\verb{~/.claude/skills}). Both \code{.md} files and subdirectories are recognised.
+Skill names are sent to the browser to power the \code{/}-autocomplete in the
+chat input.}
 }
 \value{
 NULL (called for side effects)

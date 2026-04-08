@@ -29,6 +29,10 @@ claude_chat_ui <- function(id, height = "100%") {
     "shinyClaudeCodeUI-assets",
     system.file("css", package = "shinyClaudeCodeUI")
   )
+  shiny::addResourcePath(
+    "shinyClaudeCodeUI-js",
+    system.file("js", package = "shinyClaudeCodeUI")
+  )
 
   css_version <- as.character(utils::packageVersion("shinyClaudeCodeUI"))
 
@@ -36,6 +40,9 @@ claude_chat_ui <- function(id, height = "100%") {
     htmltools::tags$link(
       rel = "stylesheet",
       href = paste0("shinyClaudeCodeUI-assets/claude-chat.css?v=", css_version)
+    ),
+    htmltools::tags$script(
+      src = paste0("shinyClaudeCodeUI-js/claude-chat.js?v=", css_version)
     ),
     htmltools::tags$div(
       class = "claude-chat-container",
@@ -46,8 +53,15 @@ claude_chat_ui <- function(id, height = "100%") {
         shinychat::chat_ui(
           ns("chat"),
           height = "100%",
-          placeholder = "Ask Claude Code anything..."
+          placeholder = "Ask Claude Code anything... (type / for skills)"
         )
+      ),
+      # Skill autocomplete dropdown - populated by server via sendCustomMessage
+      htmltools::tags$div(
+        id = ns("skill_dropdown"),
+        class = "skill-autocomplete",
+        `data-chat-ns` = ns("chat"),
+        hidden = NA
       )
     ),
     htmltools::tags$script(htmltools::HTML(sprintf('
@@ -81,13 +95,21 @@ claude_chat_ui <- function(id, height = "100%") {
           }
         });
 
+        // Skills list from server -> populate dropdown autocomplete
+        Shiny.addCustomMessageHandler("shinyClaudeCodeUI_skills_%s", function(data) {
+          if (window.shinyClaudeSetSkills) {
+            window.shinyClaudeSetSkills("%s", data.skills || []);
+          }
+        });
 
       })();
     ',
       id,
       ns("status_busy"),
       ns("status_model"),
-      ns("status_tokens")
+      ns("status_tokens"),
+      id,                    # for skills handler name
+      ns("skill_dropdown")   # dropdown element id
     )))
   )
 }
@@ -127,6 +149,10 @@ claude_chat_ui <- function(id, height = "100%") {
 #'   `~/.claude/settings.json`; they do not replace it. Use this to supply
 #'   per-session overrides such as MCP server definitions or model preferences
 #'   without modifying the global user config.
+#' @param skills_dir Directory containing Claude Code skills (default:
+#'   `~/.claude/skills`). Both `.md` files and subdirectories are recognised.
+#'   Skill names are sent to the browser to power the `/`-autocomplete in the
+#'   chat input.
 #'
 #' @section Slash commands and skills:
 #' Users can type `/skill-name` directly in the chat input (e.g. `/commit`,
@@ -159,7 +185,8 @@ claude_chat_server <- function(id, workdir = getwd(),
                                disallowed_tools = NULL,
                                api_key = NULL,
                                env = NULL,
-                               config_file = NULL) {
+                               config_file = NULL,
+                               skills_dir = path.expand("~/.claude/skills")) {
 
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -185,6 +212,17 @@ claude_chat_server <- function(id, workdir = getwd(),
     rv$current_block_type <- ""
     rv$token_count <- 0  # Count tokens processed
     rv$progress_id <- NULL  # Track cli progress bar
+
+    # Send available skills to browser for / autocomplete
+    later::later(function() {
+      skills <- list_skills(skills_dir)
+      if (length(skills) > 0) {
+        session$sendCustomMessage(
+          paste0("shinyClaudeCodeUI_skills_", id),
+          list(skills = as.list(skills))
+        )
+      }
+    }, delay = 0)
 
     # Build CLI args
     build_args <- function() {
@@ -212,7 +250,7 @@ claude_chat_server <- function(id, workdir = getwd(),
       args
     }
 
-    # Build subprocess env — merges parent env with api_key and user-supplied env
+    # Build subprocess env - merges parent env with api_key and user-supplied env
     build_env <- function() {
       if (is.null(api_key) && is.null(env)) return(NULL)
       if (!is.null(env)) {
@@ -227,7 +265,7 @@ claude_chat_server <- function(id, workdir = getwd(),
 
     # --- later::later() based polling (each callback = own flush cycle) ---
 
-    # stdout polling — recursive scheduling via later::later()
+    # stdout polling - recursive scheduling via later::later()
     poll_stdout <- function() {
       proc <- shiny::isolate(rv$proc)
       if (is.null(proc)) return()
@@ -241,7 +279,7 @@ claude_chat_server <- function(id, workdir = getwd(),
       out <- tryCatch(proc$read_output(2000), error = function(e) "")
       if (nzchar(out)) process_output(out, rv, session, ns, id)
 
-      # Schedule next poll — each later() callback gets its own flush cycle
+      # Schedule next poll - each later() callback gets its own flush cycle
       later::later(poll_stdout, delay = 0.05)
     }
 
@@ -292,7 +330,7 @@ claude_chat_server <- function(id, workdir = getwd(),
       rv$progress_id <- cli::cli_progress_bar(
         format = "{cli::pb_spin} {msg}",
         format_done = "{cli::col_green(cli::symbol$tick)} {msg}",
-        extra = list(msg = "Sending message..."),  # 必须在这里初始化 extra
+        extra = list(msg = "Sending message..."),  # must initialize extra here
         clear = FALSE
       )
 
@@ -493,7 +531,7 @@ handle_event <- function(evt, rv, session, ns, id) {
     event_data <- evt$event %||% list()
     event_type <- event_data$type %||% ""
 
-    # content_block_start — track block type; end text stream before tool_use
+    # content_block_start - track block type; end text stream before tool_use
     if (event_type == "content_block_start") {
       block <- event_data$content_block %||% list()
       rv$current_block_type <- block$type %||% ""
@@ -538,11 +576,11 @@ handle_event <- function(evt, rv, session, ns, id) {
       }
     }
 
-    # content_block_delta — token-by-token text and thinking
+    # content_block_delta - token-by-token text and thinking
     if (event_type == "content_block_delta") {
       delta <- event_data$delta %||% list()
 
-      # Text streaming — buffer whitespace-only prefix to avoid empty bubbles
+      # Text streaming - buffer whitespace-only prefix to avoid empty bubbles
       if (identical(delta$type, "text_delta") && nzchar(delta$text %||% "")) {
         rv$current_text <- paste0(rv$current_text, delta$text)
         rv$token_count <- rv$token_count + 1
@@ -568,13 +606,13 @@ handle_event <- function(evt, rv, session, ns, id) {
         }
       }
 
-      # Thinking — accumulate buffer, render as card at content_block_stop
+      # Thinking - accumulate buffer, render as card at content_block_stop
       if (identical(delta$type, "thinking_delta") && nzchar(delta$thinking %||% "")) {
         rv$current_thinking <- paste0(rv$current_thinking %||% "", delta$thinking)
       }
     }
 
-    # content_block_stop — end text stream; finalize thinking block
+    # content_block_stop - end text stream; finalize thinking block
     if (event_type == "content_block_stop") {
       if (identical(rv$current_block_type, "text") && rv$is_streaming) {
         message("[DEBUG][APPEND] stream/block_stop/text/chunk=end")

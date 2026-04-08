@@ -1,3 +1,22 @@
+#' List available Claude Code skills
+#'
+#' Reads skill names from a skills directory. Both `.md` files and
+#' subdirectories are recognised as skills.
+#'
+#' @param skills_dir Path to the skills directory (default: `~/.claude/skills`)
+#'
+#' @return Character vector of skill names (without `.md` extension), sorted.
+#' @keywords internal
+list_skills <- function(skills_dir = path.expand("~/.claude/skills")) {
+  if (!dir.exists(skills_dir)) return(character(0))
+  entries <- list.files(skills_dir, full.names = FALSE)
+  # Accept both directories and .md files
+  is_skill <- dir.exists(file.path(skills_dir, entries)) |
+              grepl("\\.md$", entries, ignore.case = TRUE)
+  sort(tools::file_path_sans_ext(entries[is_skill]))
+}
+
+
 #' Find Claude Code CLI binary
 #'
 #' @return Path to claude binary
