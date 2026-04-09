@@ -315,6 +315,17 @@ claude_chat_server <- function(id, workdir = getwd(),
     later::later(poll_stdout, delay = 0)
     later::later(poll_stderr, delay = 0)
 
+    # Update status bar with known model parameter immediately.
+    # Claude Code only sends the system/init event after the first user message,
+    # so we pre-populate with whatever we know now; init event will overwrite
+    # with the exact resolved model name once the first turn completes.
+    later::later(function() {
+      session$sendCustomMessage(
+        paste0("shinyClaudeCodeUI_event_", id),
+        list(event_type = "init", data = list(model = model %||% "Claude Code"))
+      )
+    }, delay = 0)
+
     # Handle user input from shinychat
     shiny::observeEvent(input$chat_user_input, {
       user_msg <- input$chat_user_input
