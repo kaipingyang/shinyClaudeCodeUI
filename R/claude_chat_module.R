@@ -267,11 +267,26 @@ claude_chat_server <- function(id, workdir = getwd(),
       proc_env
     }
 
+    # --- Process startup (eager: tied to session lifecycle, not first message) ---
+
+    start_process <- function() {
+      message("[shinyClaudeCodeUI] Starting claude process...")
+      rv$proc <- processx::process$new(
+        command = claude_bin,
+        args = build_args(),
+        stdin = "|", stdout = "|", stderr = "|",
+        wd = workdir,
+        env = build_env()
+      )
+      rv$buffer <- ""
+      message("[shinyClaudeCodeUI] PID: ", rv$proc$get_pid())
+    }
+
     # --- later::later() based polling (each callback = own flush cycle) ---
 
     # stdout polling - recursive scheduling via later::later()
     poll_stdout <- function() {
-      proc <- shiny::isolate(rv$proc)
+      proc <- rv$proc
       if (is.null(proc)) return()
 
       if (!proc$is_alive()) {
@@ -283,58 +298,50 @@ claude_chat_server <- function(id, workdir = getwd(),
       out <- tryCatch(proc$read_output(2000), error = function(e) "")
       if (nzchar(out)) process_output(out, rv, session, ns, id)
 
-      # Schedule next poll - each later() callback gets its own flush cycle
       later::later(poll_stdout, delay = 0.05)
     }
 
     # stderr polling
     poll_stderr <- function() {
-      proc <- shiny::isolate(rv$proc)
+      proc <- rv$proc
       if (is.null(proc) || !proc$is_alive()) return()
       err <- tryCatch(proc$read_error(2000), error = function(e) "")
       if (nzchar(err)) message("[shinyClaudeCodeUI] STDERR: ", substr(err, 1, 200))
       later::later(poll_stderr, delay = 0.5)
     }
 
-    # Track whether polling is active
-    polling_active <- FALSE
+    # Start process and polling immediately at session init
+    start_process()
+    later::later(poll_stdout, delay = 0)
+    later::later(poll_stderr, delay = 0)
 
     # Handle user input from shinychat
     shiny::observeEvent(input$chat_user_input, {
       user_msg <- input$chat_user_input
       if (!nzchar(trimws(user_msg))) return()
 
-      # Start process if not running
-      just_started <- FALSE
+      # Restart process if it died between messages
       if (is.null(rv$proc) || !rv$proc$is_alive()) {
-        message("[shinyClaudeCodeUI] Starting claude process...")
-        rv$proc <- processx::process$new(
-          command = claude_bin,
-          args = build_args(),
-          stdin = "|", stdout = "|", stderr = "|",
-          wd = workdir,
-          env = build_env()
-        )
-        rv$buffer <- ""
-        just_started <- TRUE
-        message("[shinyClaudeCodeUI] PID: ", rv$proc$get_pid())
+        start_process()
+        later::later(poll_stdout, delay = 0)
+        later::later(poll_stderr, delay = 0)
       }
 
-      # Reset streaming state
+      # Reset per-turn streaming state
       rv$current_text <- ""
       rv$is_streaming <- FALSE
       rv$is_thinking <- FALSE
       rv$is_thinking_streaming <- FALSE
       rv$current_thinking <- ""
       rv$text_already_rendered <- FALSE
-      rv$tool_cards_rendered <- list()  # Reset tool card tracking
+      rv$tool_cards_rendered <- list()
       rv$token_count <- 0
 
       # Start R console progress bar
       rv$progress_id <- cli::cli_progress_bar(
         format = "{cli::pb_spin} {msg}",
         format_done = "{cli::col_green(cli::symbol$tick)} {msg}",
-        extra = list(msg = "Sending message..."),  # must initialize extra here
+        extra = list(msg = "Sending message..."),
         clear = FALSE
       )
 
@@ -343,13 +350,6 @@ claude_chat_server <- function(id, workdir = getwd(),
       rv$proc$write_input(paste0(jsonlite::toJSON(msg, auto_unbox = TRUE), "\n"))
 
       cli::cli_progress_update(id = rv$progress_id, extra = list(msg = "Waiting for response..."))
-
-      # Start polling if not already active
-      if (just_started || !polling_active) {
-        polling_active <<- TRUE
-        later::later(poll_stdout, delay = 0)
-        later::later(poll_stderr, delay = 0)
-      }
     })
 
     # Cleanup
