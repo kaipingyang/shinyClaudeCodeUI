@@ -188,6 +188,52 @@ status_bar_ui <- function(ns) {
 }
 
 
+#' Build a display title for a tool call
+#'
+#' Extracts the key argument from parsed tool input and formats it as
+#' `ToolName(key_arg)` for use in the `tool-title` attribute of
+#' `shiny-tool-request`.
+#'
+#' @param tool_name Tool name string
+#' @param input Parsed list of tool input parameters
+#' @param max_len Maximum characters for the argument preview (default 70)
+#'
+#' @return Character string like `"Bash(ls -la /path)"` or `"Read(file.R)"`
+#' @keywords internal
+make_tool_title <- function(tool_name, input, max_len = 70) {
+  arg <- switch(tool_name,
+    Bash        = input$command,
+    Read        = input$file_path,
+    Write       = input$file_path,
+    Edit        = input$file_path,
+    Glob        = input$pattern,
+    Grep        = {
+      if (!is.null(input$pattern) && !is.null(input$path))
+        paste0(input$pattern, " in ", basename(input$path))
+      else
+        input$pattern
+    },
+    WebSearch   = input$query,
+    WebFetch    = input$url,
+    {
+      # Generic fallback: first non-null scalar value
+      vals <- Filter(function(v) is.character(v) || is.numeric(v), input)
+      if (length(vals) > 0) as.character(vals[[1]]) else NULL
+    }
+  )
+
+  if (is.null(arg) || !nzchar(arg %||% "")) {
+    return(paste0(tool_name, "()"))
+  }
+
+  if (nchar(arg) > max_len) {
+    arg <- paste0(substr(arg, 1, max_len), "\u2026")
+  }
+
+  paste0(tool_name, "(", arg, ")")
+}
+
+
 #' Get icon for a tool name
 #' @keywords internal
 tool_icon <- function(tool_name) {

@@ -203,6 +203,9 @@ claude_chat_server <- function(id, workdir = getwd(),
     rv$buffer <- ""
     rv$tool_registry <- list()
     rv$tool_cards_rendered <- list()  # Track which tool cards have been rendered
+    rv$current_tool_id <- NULL        # Tool_use block currently being streamed
+    rv$tool_input_buffers <- list()   # Accumulate input_json_delta per tool_id
+    rv$tool_titles <- list()          # Computed display titles keyed by tool_id
     rv$is_streaming <- FALSE
     rv$current_text <- ""
     rv$is_thinking <- FALSE
@@ -475,10 +478,13 @@ handle_event <- function(evt, rv, session, ns, id) {
             jsonlite::toJSON(block$input %||% list(), auto_unbox = TRUE),
             error = function(e) "{}"
           )
+          tool_title <- make_tool_title(block$name %||% "unknown", block$input %||% list())
+          rv$tool_titles[[block$id]] <- tool_title  # Save for result card
           card_html <- as.character(htmltools::tag("shiny-tool-request", list(
             `request-id` = block$id,
-            `tool-name` = block$name %||% "unknown",
-            arguments = args_json
+            `tool-name`  = block$name %||% "unknown",
+            `tool-title` = tool_title,
+            arguments    = args_json
           )))
           shinychat::chat_append_message(chat_id,
             list(role = "assistant", content = card_html),
@@ -511,11 +517,13 @@ handle_event <- function(evt, rv, session, ns, id) {
 
         # Replace the shiny-tool-request bubble in-place using chunk=TRUE + operation="replace"
         # chunk=FALSE always creates a new message; chunk=TRUE with operation=NULL replaces content
+        tool_title <- rv$tool_titles[[block$tool_use_id]]
         card_html <- as.character(htmltools::tag("shiny-tool-result", list(
           `request-id` = block$tool_use_id,
-          `tool-name` = tool_name %||% "unknown",
-          status = if (is_error) "error" else "success",
-          value = content_str,
+          `tool-name`  = tool_name %||% "unknown",
+          `tool-title` = tool_title %||% NULL,
+          status       = if (is_error) "error" else "success",
+          value        = content_str,
           `value-type` = "code"
         )))
         shinychat::chat_append_message(chat_id,
@@ -552,6 +560,8 @@ handle_event <- function(evt, rv, session, ns, id) {
           tool_name <- block$name %||% "unknown"
           rv$tool_registry[[block$id]] <- tool_name
           rv$tool_cards_rendered[[block$id]] <- TRUE  # Mark as rendered
+          rv$current_tool_id <- block$id              # Track for input_json_delta
+          rv$tool_input_buffers[[block$id]] <- ""     # Init accumulation buffer
           update_progress(paste0("Running tool: ", tool_name))
           card_html <- as.character(htmltools::tag("shiny-tool-request", list(
             `request-id` = block$id,
@@ -610,6 +620,17 @@ handle_event <- function(evt, rv, session, ns, id) {
       if (identical(delta$type, "thinking_delta") && nzchar(delta$thinking %||% "")) {
         rv$current_thinking <- paste0(rv$current_thinking %||% "", delta$thinking)
       }
+
+      # Tool input - accumulate JSON fragments for current tool_use block
+      if (identical(delta$type, "input_json_delta") && !is.null(rv$current_tool_id)) {
+        partial <- delta$partial_json %||% ""
+        if (nzchar(partial)) {
+          rv$tool_input_buffers[[rv$current_tool_id]] <- paste0(
+            rv$tool_input_buffers[[rv$current_tool_id]] %||% "",
+            partial
+          )
+        }
+      }
     }
 
     # content_block_stop - end text stream; finalize thinking block
@@ -635,6 +656,34 @@ handle_event <- function(evt, rv, session, ns, id) {
         rv$is_thinking_streaming <- FALSE
         rv$current_thinking <- ""
       }
+
+      # Tool input complete - update card with proper title and full arguments
+      if (identical(rv$current_block_type, "tool_use") && !is.null(rv$current_tool_id)) {
+        tool_id   <- rv$current_tool_id
+        tool_name <- rv$tool_registry[[tool_id]] %||% "unknown"
+        input_json <- rv$tool_input_buffers[[tool_id]] %||% "{}"
+
+        input <- tryCatch(
+          jsonlite::fromJSON(input_json, simplifyVector = FALSE),
+          error = function(e) list()
+        )
+        tool_title <- make_tool_title(tool_name, input)
+        rv$tool_titles[[tool_id]] <- tool_title  # Save for result card
+
+        card_html <- as.character(htmltools::tag("shiny-tool-request", list(
+          `request-id` = tool_id,
+          `tool-name`  = tool_name,
+          `tool-title` = tool_title,
+          arguments    = input_json
+        )))
+        message("[DEBUG][UPDATE] tool_use/title=", tool_title)
+        shinychat::chat_append_message(chat_id,
+          list(role = "assistant", content = card_html),
+          chunk = TRUE, operation = "replace", session = session)
+
+        rv$current_tool_id <- NULL
+      }
+
       rv$current_block_type <- ""
     }
 
