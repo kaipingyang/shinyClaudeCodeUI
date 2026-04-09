@@ -234,6 +234,45 @@ make_tool_title <- function(tool_name, input, max_len = 70) {
 }
 
 
+#' Extract a partial tool title from an incomplete JSON buffer
+#'
+#' Uses regex to pull the key argument out of a still-streaming JSON fragment,
+#' so the card title can be updated as soon as the first meaningful chunk
+#' arrives (before content_block_stop).
+#'
+#' @param tool_name Tool name string
+#' @param buffer Partial JSON string accumulated so far
+#'
+#' @return Character title like `"Bash(ls -la…)"`, or NULL if not enough data
+#' @keywords internal
+try_partial_title <- function(tool_name, buffer) {
+  if (!nzchar(buffer %||% "")) return(NULL)
+
+  key <- switch(tool_name,
+    Bash      = "command",
+    Read      = "file_path",
+    Write     = "file_path",
+    Edit      = "file_path",
+    Glob      = "pattern",
+    Grep      = "pattern",
+    WebSearch = "query",
+    WebFetch  = "url",
+    NULL
+  )
+  if (is.null(key)) return(NULL)
+
+  # Match: "key": "captured_value  (value may be partial, no closing quote needed)
+  pattern <- paste0('"', key, '"\\s*:\\s*"([^"]+)')
+  m <- regexec(pattern, buffer, perl = TRUE)
+  captures <- regmatches(buffer, m)[[1]]
+  if (length(captures) < 2 || !nzchar(captures[2])) return(NULL)
+
+  arg <- captures[2]
+  # Always append … since JSON is still incomplete
+  paste0(tool_name, "(", arg, "\u2026)")
+}
+
+
 #' Get icon for a tool name
 #' @keywords internal
 tool_icon <- function(tool_name) {

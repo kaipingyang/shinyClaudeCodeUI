@@ -206,6 +206,7 @@ claude_chat_server <- function(id, workdir = getwd(),
     rv$current_tool_id <- NULL        # Tool_use block currently being streamed
     rv$tool_input_buffers <- list()   # Accumulate input_json_delta per tool_id
     rv$tool_titles <- list()          # Computed display titles keyed by tool_id
+    rv$tool_title_shown <- list()     # Whether an early title update was sent
     rv$is_streaming <- FALSE
     rv$current_text <- ""
     rv$is_thinking <- FALSE
@@ -562,6 +563,7 @@ handle_event <- function(evt, rv, session, ns, id) {
           rv$tool_cards_rendered[[block$id]] <- TRUE  # Mark as rendered
           rv$current_tool_id <- block$id              # Track for input_json_delta
           rv$tool_input_buffers[[block$id]] <- ""     # Init accumulation buffer
+          rv$tool_title_shown[[block$id]] <- FALSE    # No early title yet
           update_progress(paste0("Running tool: ", tool_name))
           card_html <- as.character(htmltools::tag("shiny-tool-request", list(
             `request-id` = block$id,
@@ -625,10 +627,29 @@ handle_event <- function(evt, rv, session, ns, id) {
       if (identical(delta$type, "input_json_delta") && !is.null(rv$current_tool_id)) {
         partial <- delta$partial_json %||% ""
         if (nzchar(partial)) {
-          rv$tool_input_buffers[[rv$current_tool_id]] <- paste0(
-            rv$tool_input_buffers[[rv$current_tool_id]] %||% "",
+          tool_id <- rv$current_tool_id
+          rv$tool_input_buffers[[tool_id]] <- paste0(
+            rv$tool_input_buffers[[tool_id]] %||% "",
             partial
           )
+
+          # Early title update: fire once as soon as we can extract something
+          if (!isTRUE(rv$tool_title_shown[[tool_id]])) {
+            tool_name <- rv$tool_registry[[tool_id]] %||% "unknown"
+            early_title <- try_partial_title(tool_name, rv$tool_input_buffers[[tool_id]])
+            if (!is.null(early_title)) {
+              rv$tool_title_shown[[tool_id]] <- TRUE
+              early_card <- as.character(htmltools::tag("shiny-tool-request", list(
+                `request-id` = tool_id,
+                `tool-name`  = tool_name,
+                `tool-title` = early_title,
+                arguments    = "{}"
+              )))
+              shinychat::chat_append_message(chat_id,
+                list(role = "assistant", content = early_card),
+                chunk = TRUE, operation = "replace", session = session)
+            }
+          }
         }
       }
     }
